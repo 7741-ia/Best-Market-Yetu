@@ -1,5 +1,3 @@
-export const CITIES = ['Kinshasa', 'Lubumbashi', 'Goma', 'Bukavu', 'Kisangani']
-
 export const CATEGORIES = [
   { id: 'all', label: 'Tout', emoji: '✨' },
   { id: 'souliers', label: 'Souliers', emoji: '👟' },
@@ -15,7 +13,13 @@ export const SHOPS = [
   {
     id: 'kicks-gombe',
     name: 'Kicks Gombe',
-    city: 'Kinshasa',
+    province: 'Kinshasa',
+    city: 'Gombe',
+    lat: -4.305,
+    lng: 15.303,
+    tauxCdfPerUsd: 2800,
+    trusted: true,
+    money: { airtel: '', mpesa: '', orange: '' },
     bio: 'Sneakers neuves et presque neuves. Livraison Gombe, Lingwala, Kintambo.',
     whatsapp: '243810000001',
     photo:
@@ -27,7 +31,13 @@ export const SHOPS = [
   {
     id: 'parfum-sika',
     name: 'Parfum Ya Sika',
-    city: 'Kinshasa',
+    province: 'Kinshasa',
+    city: 'Lemba',
+    lat: -4.392,
+    lng: 15.322,
+    tauxCdfPerUsd: 2850,
+    trusted: true,
+    money: { airtel: '', mpesa: '', orange: '' },
     bio: 'Parfums arabes et originaux. Sentir avant d’acheter — on discute sur WhatsApp.',
     whatsapp: '243810000002',
     photo:
@@ -39,7 +49,13 @@ export const SHOPS = [
   {
     id: 'mama-style',
     name: 'Mama Style',
+    province: 'Haut-Katanga',
     city: 'Lubumbashi',
+    lat: -11.664,
+    lng: 27.479,
+    tauxCdfPerUsd: 2900,
+    trusted: false,
+    money: { airtel: '', mpesa: '', orange: '' },
     bio: 'Mode femme, sacs et looks pour sorties. Pas de boutique physique — tout en ligne.',
     whatsapp: '243970000003',
     photo:
@@ -51,7 +67,13 @@ export const SHOPS = [
   {
     id: 'gold-wrist',
     name: 'Gold Wrist',
+    province: 'Nord-Kivu',
     city: 'Goma',
+    lat: -1.679,
+    lng: 29.223,
+    tauxCdfPerUsd: 3000,
+    trusted: false,
+    money: { airtel: '', mpesa: '', orange: '' },
     bio: 'Montres et bijoux. Paiement à confirmer sur WhatsApp (cash ou Mobile Money).',
     whatsapp: '243990000004',
     photo:
@@ -162,14 +184,19 @@ export function formatUsd(n) {
   return `$${Number(n).toLocaleString('fr-FR')}`
 }
 
-export function formatCdf(usd) {
-  const cdf = Math.round(Number(usd) * USD_TO_CDF)
+export function shopRate(shop) {
+  const n = Number(shop?.tauxCdfPerUsd)
+  return n > 0 ? n : USD_TO_CDF
+}
+
+export function formatCdf(usd, shop) {
+  const cdf = Math.round(Number(usd) * shopRate(shop))
   return `${cdf.toLocaleString('fr-FR')} FC`
 }
 
 export function waBuyUrl(shop, product) {
   const phone = String(shop.whatsapp || '').replace(/\D/g, '')
-  const text = `Bonjour ${shop.name} 👋\nJe viens de *Best Market Yetu*.\nJe veux acheter : ${product.name}\nPrix : ${formatUsd(product.priceUsd)} (${formatCdf(product.priceUsd)})\nOn peut discuter (cash / Airtel Money / M-Pesa / Orange Money) ?`
+  const text = `Bonjour ${shop.name} 👋\nJe viens de *Best Market Yetu*.\nJe veux acheter : ${product.name}\nPrix : ${formatUsd(product.priceUsd)} (${formatCdf(product.priceUsd, shop)})\nTaux vendeur : 1$ = ${shopRate(shop).toLocaleString('fr-FR')} FC\nOn peut discuter (cash / Airtel Money / M-Pesa / Orange Money) ?`
   return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
 }
 
