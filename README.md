@@ -1,16 +1,27 @@
 # Best Market Yetu
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Vitrine pour vendeurs sans magasin en RDC. Achat via WhatsApp.
 
-Currently, two official plugins are available:
+## Lancer en local
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+Ouvre http://127.0.0.1:5173/
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Déployer sur Vercel
 
-## Expanding the Oxlint configuration
+1. Pousse le repo GitHub.
+2. [vercel.com/new](https://vercel.com/new) → importe le projet.
+3. Framework **Vite**, build `npm run build`, dossier `dist`.
+4. (Optionnel) Variables d’environnement : voir `.env.example`.
+5. Deploy. Les routes React (`/produit/...`) marchent grâce à `vercel.json`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## Déployer sur Render
+
+1. New → **Static Site** (ou Blueprint `render.yaml`).
+2. Build : `npm install && npm run build`
+3. Publish directory : `dist`
+4. Rewrite : `/*` → `/index.html` (déjà dans `render.yaml` et `public/_redirects`).
