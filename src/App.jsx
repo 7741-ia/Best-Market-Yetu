@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { CATEGORIES, formatCdf, formatUsd, shopRate, slugify, waBuyUrl } from './data'
+import { db } from './firebase'
 import { kmBetween, mapEmbed, readGps } from './geo'
 import { StoreProvider, useStore } from './store.jsx'
 import PlacePicker from './PlacePicker.jsx'
@@ -226,17 +228,138 @@ function Home() {
   )
 }
 
+function readableDate(value) {
+  const date = value?.toDate?.()
+  if (!date) return 'À l’instant'
+  return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
 function ProductPage() {
   const { id } = useParams()
-  const { products, shops, bumpViews, reportProduct } = useStore()
+  const { products, shops, bumpViews, reportProduct, user } = useStore()
   const product = products.find((p) => p.id === id && !p.removed)
   const shop = shops.find((s) => s.id === product?.shopId)
+  const [comments, setComments] = useState([])
+  const [commentText, setCommentText] = useState('')
+  const [commentError, setCommentError] = useState('')
+  const [commentBusy, setCommentBusy] = useState(false)
+  const [reservation, setReservation] = useState(null)
+  const [reservationMessage, setReservationMessage] = useState('')
+  const [reservationBusy, setReservationBusy] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     if (product) bumpViews(product.id)
   }, [product?.id])
 
+  useEffect(() => {
+    const commentsQuery = query(
+      collection(db, 'products', id, 'comments'),
+      orderBy('createdAt', 'desc'),
+    )
+    return onSnapshot(
+      commentsQuery,
+      (snap) => setComments(snap.docs.map((comment) => ({ id: comment.id, ...comment.data() }))),
+      () => setComments([]),
+    )
+  }, [id])
+
+  useEffect(() => {
+    return onSnapshot(
+      doc(db, 'reservations', id),
+      (snap) => setReservation(snap.exists() ? snap.data() : null),
+      () => setReservation(null),
+    )
+  }, [id])
+
+  useEffect(() => {
+    const expiresAt = reservation?.expiresAt?.toMillis?.()
+    if (!expiresAt) return undefined
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, expiresAt - Date.now()) + 50)
+    return () => clearTimeout(timer)
+  }, [reservation?.expiresAt])
+
   if (!product || !shop || shop.banned) return <p className="wrap">Produit introuvable.</p>
+
+  const reservationUntil = reservation?.expiresAt?.toMillis?.() || 0
+  const reservationActive = reservationUntil > now
+  const ownReservation = reservationActive && reservation?.buyerId === user?.id
+
+  async function submitComment(e) {
+    e.preventDefault()
+    const text = commentText.trim()
+    if (!user || !text) return
+    setCommentBusy(true)
+    setCommentError('')
+    try {
+      await addDoc(collection(db, 'products', product.id, 'comments'), {
+        userId: user.id,
+        userName: user.name || 'Client',
+        text,
+        createdAt: serverTimestamp(),
+      })
+      setCommentText('')
+    } catch {
+      setCommentError('Impossible de publier le commentaire. Vérifie ta connexion puis réessaie.')
+    } finally {
+      setCommentBusy(false)
+    }
+  }
+
+  async function reserveProduct() {
+    if (!user) {
+      setReservationMessage('Connecte-toi pour réserver cet article.')
+      return
+    }
+    if (user.shopId === product.shopId) {
+      setReservationMessage('Tu ne peux pas réserver un article de ta propre boutique.')
+      return
+    }
+    setReservationBusy(true)
+    setReservationMessage('')
+    try {
+      const ref = doc(db, 'reservations', product.id)
+      await runTransaction(db, async (transaction) => {
+        const current = await transaction.get(ref)
+        const currentExpiry = current.data()?.expiresAt?.toMillis?.() || 0
+        if (current.exists() && currentExpiry > Date.now()) {
+          const error = new Error('Article déjà réservé.')
+          error.code = 'market/already-reserved'
+          throw error
+        }
+        transaction.set(ref, {
+          productId: product.id,
+          buyerId: user.id,
+          buyerName: user.name || 'Client',
+          expiresAt: Timestamp.fromMillis(Date.now() + 30 * 60 * 1000),
+          createdAt: serverTimestamp(),
+        })
+      })
+      setReservationMessage('Article réservé pendant 30 minutes. Contacte le vendeur sur WhatsApp pour confirmer.')
+    } catch (error) {
+      setReservationMessage(
+        error?.code === 'market/already-reserved'
+          ? 'Cet article est déjà réservé pour le moment.'
+          : 'Impossible de réserver cet article. Réessaie dans un instant.',
+      )
+    } finally {
+      setReservationBusy(false)
+    }
+  }
+
+  async function cancelReservation() {
+    if (!user) return
+    setReservationBusy(true)
+    setReservationMessage('')
+    try {
+      await deleteDoc(doc(db, 'reservations', product.id))
+      setReservationMessage('Réservation annulée.')
+    } catch {
+      setReservationMessage('Impossible d’annuler la réservation. Réessaie.')
+    } finally {
+      setReservationBusy(false)
+    }
+  }
 
   return (
     <div className="wrap detail">
@@ -301,6 +424,80 @@ function ProductPage() {
             Signaler
           </button>
         </div>
+        <section className="market-section" aria-labelledby="reservation-title">
+          <h2 id="reservation-title">Réservation express</h2>
+          <p className="muted">
+            Réserve l’article 30 minutes, le temps de confirmer avec le vendeur. Cela limite les doubles ventes.
+          </p>
+          {reservationActive ? (
+            <p className="notice">
+              {ownReservation
+                ? `Tu as réservé cet article jusqu’à ${readableDate(reservation.expiresAt)}.`
+                : `Cet article est réservé jusqu’à ${readableDate(reservation.expiresAt)}.`}
+            </p>
+          ) : null}
+          <div className="row">
+            {!user ? (
+              <Link className="btn btn-gold" to="/connexion">
+                Connecte-toi pour réserver
+              </Link>
+            ) : ownReservation ? (
+              <button className="btn btn-line" type="button" disabled={reservationBusy} onClick={cancelReservation}>
+                Annuler ma réservation
+              </button>
+            ) : !reservationActive && user.shopId !== product.shopId ? (
+              <button className="btn btn-gold" type="button" disabled={reservationBusy} onClick={reserveProduct}>
+                {reservationBusy ? 'Réservation…' : 'Réserver 30 min'}
+              </button>
+            ) : null}
+          </div>
+          {reservationMessage ? <p className="muted">{reservationMessage}</p> : null}
+        </section>
+        <section className="market-section" aria-labelledby="comments-title">
+          <div className="section-head">
+            <div>
+              <h2 id="comments-title">Questions et commentaires</h2>
+              <p className="muted">{comments.length} commentaire{comments.length > 1 ? 's' : ''}</p>
+            </div>
+          </div>
+          {comments.length ? (
+            <div className="comment-list">
+              {comments.map((comment) => (
+                <article className="comment" key={comment.id}>
+                  <div className="comment-meta">
+                    <b>{comment.userName || 'Client'}</b>
+                    <time dateTime={comment.createdAt?.toDate?.().toISOString()}>{readableDate(comment.createdAt)}</time>
+                  </div>
+                  <p>{comment.text}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">Aucun commentaire pour le moment.</p>
+          )}
+          {user ? (
+            <form className="form comment-form" onSubmit={submitComment}>
+              <label>
+                Ton commentaire
+                <textarea
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  maxLength="400"
+                  placeholder="Pose une question au vendeur ou partage ton avis…"
+                  required
+                />
+              </label>
+              {commentError ? <p className="error">{commentError}</p> : null}
+              <button className="btn btn-gold" type="submit" disabled={commentBusy || !commentText.trim()}>
+                {commentBusy ? 'Publication…' : 'Publier le commentaire'}
+              </button>
+            </form>
+          ) : (
+            <p className="notice">
+              <Link to="/connexion">Connecte-toi</Link> ou crée un compte pour ajouter un commentaire.
+            </p>
+          )}
+        </section>
       </div>
     </div>
   )
