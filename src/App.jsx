@@ -256,6 +256,8 @@ function ProductPage() {
   const [reservation, setReservation] = useState(null)
   const [reservationMessage, setReservationMessage] = useState('')
   const [reservationBusy, setReservationBusy] = useState(false)
+  const [reportMessage, setReportMessage] = useState('')
+  const [reportBusy, setReportBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -371,6 +373,30 @@ function ProductPage() {
     }
   }
 
+  async function submitProductReport() {
+    if (!user) {
+      setReportMessage('Connecte-toi pour envoyer un signalement identifiable.')
+      return
+    }
+    if (user.shopId === shop.id) {
+      setReportMessage('Tu ne peux pas signaler un article de ta propre boutique.')
+      return
+    }
+    const message = prompt('Explique le problème avec cet article :')
+    if (!message?.trim()) return
+
+    setReportBusy(true)
+    setReportMessage('')
+    try {
+      await reportProduct({ productId: product.id, message })
+      setReportMessage('Merci. Ton signalement a été transmis à l’administration.')
+    } catch (error) {
+      setReportMessage(error?.message || 'Impossible d’envoyer le signalement. Réessaie.')
+    } finally {
+      setReportBusy(false)
+    }
+  }
+
   return (
     <div className="wrap detail">
       <div className="detail-photo">
@@ -423,17 +449,13 @@ function ProductPage() {
           <button
             className="btn btn-line"
             type="button"
-            onClick={() => {
-              const reason = prompt('Pourquoi signaler cet article ?')
-              if (reason) {
-                reportProduct({ productId: product.id, reason })
-                alert('Merci. On va regarder.')
-              }
-            }}
+            disabled={reportBusy}
+            onClick={submitProductReport}
           >
-            Signaler
+            {reportBusy ? 'Envoi…' : 'Signaler l’article'}
           </button>
         </div>
+        {reportMessage ? <p className="muted">{reportMessage}</p> : null}
         <section className="market-section" aria-labelledby="reservation-title">
           <h2 id="reservation-title">Réservation express</h2>
           <p className="muted">
@@ -515,10 +537,37 @@ function ProductPage() {
 
 function ShopPage() {
   const { id } = useParams()
-  const { shops, products } = useStore()
+  const { shops, products, user, reportShop } = useStore()
   const shop = shops.find((s) => s.id === id)
   const items = products.filter((p) => p.shopId === id)
+  const [reportMessage, setReportMessage] = useState('')
+  const [reportBusy, setReportBusy] = useState(false)
   if (!shop || shop.banned) return <p className="wrap">Boutique indisponible.</p>
+
+  async function submitShopReport() {
+    if (!user) {
+      setReportMessage('Connecte-toi pour signaler cette boutique.')
+      return
+    }
+    if (user.shopId === shop.id) {
+      setReportMessage('Tu ne peux pas signaler ta propre boutique.')
+      return
+    }
+    const message = prompt(`Pourquoi signaler la boutique ${shop.name} ?`)
+    if (!message?.trim()) return
+
+    setReportBusy(true)
+    setReportMessage('')
+    try {
+      await reportShop({ shopId: shop.id, message })
+      setReportMessage('Merci. Le signalement de cette boutique a été transmis à l’administration.')
+    } catch (error) {
+      setReportMessage(error?.message || 'Impossible d’envoyer le signalement. Réessaie.')
+    } finally {
+      setReportBusy(false)
+    }
+  }
+
   return (
     <div className="wrap">
       <div className="cover">
@@ -537,14 +586,20 @@ function ShopPage() {
       {shop.lat && shop.lng ? (
         <iframe className="map-frame" title="Carte boutique" src={mapEmbed(shop.lat, shop.lng)} />
       ) : null}
-      <a
-        className="btn btn-wa"
-        href={`https://wa.me/${String(shop.whatsapp).replace(/\D/g, '')}?text=${encodeURIComponent(`Bonjour ${shop.name}, je viens de Best Market Yetu.`)}`}
-        target="_blank"
-        rel="noreferrer"
-      >
-        Écrire à la boutique
-      </a>
+      <div className="row">
+        <a
+          className="btn btn-wa"
+          href={`https://wa.me/${String(shop.whatsapp).replace(/\D/g, '')}?text=${encodeURIComponent(`Bonjour ${shop.name}, je viens de Best Market Yetu.`)}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Écrire à la boutique
+        </a>
+        <button className="btn btn-line" type="button" disabled={reportBusy} onClick={submitShopReport}>
+          {reportBusy ? 'Envoi…' : 'Signaler cette boutique'}
+        </button>
+      </div>
+      {reportMessage ? <p className="muted">{reportMessage}</p> : null}
       <div className="grid" style={{ marginTop: 22 }}>
         {items.map((p) => (
           <ProductCard key={p.id} product={p} shop={shop} />
@@ -847,7 +902,9 @@ function SetupShop() {
 }
 
 function Sell() {
-  const { user, ready, myShop, products, saveShop } = useStore()
+  const { user, ready, marketReady, marketError, myShop, products, saveShop, deleteMyProduct } = useStore()
+  const [productActionError, setProductActionError] = useState('')
+  const [deletingProductId, setDeletingProductId] = useState('')
   if (!ready) return <p className="wrap muted">Chargement…</p>
   if (!user) return <Navigate to="/inscription" replace />
   if (user.banned || myShop?.banned) {
@@ -859,6 +916,20 @@ function Sell() {
     )
   }
   const mine = products.filter((p) => p.shopId === myShop?.id)
+
+  async function deleteProduct(product) {
+    if (!confirm(`Supprimer définitivement « ${product.name} » ?`)) return
+    setProductActionError('')
+    setDeletingProductId(product.id)
+    try {
+      await deleteMyProduct(product.id)
+    } catch (error) {
+      setProductActionError(error?.message || 'Impossible de supprimer cet article. Réessaie.')
+    } finally {
+      setDeletingProductId('')
+    }
+  }
+
   return (
     <div className="wrap" style={{ padding: '22px 0' }}>
       <h1>{myShop ? myShop.name : 'Ta boutique'}</h1>
@@ -942,10 +1013,27 @@ function Sell() {
           Modifier
         </Link>
       </div>
+      {productActionError ? <p className="error">{productActionError}</p> : null}
+      {marketError ? <p className="error">{marketError}</p> : null}
       {mine.length ? (
         <div className="grid" style={{ marginTop: 22 }}>
           {mine.map((p) => (
-            <ProductCard key={p.id} product={p} shop={myShop} />
+            <div className="seller-product" key={p.id}>
+              <ProductCard product={p} shop={myShop} />
+              <div className="row seller-product-actions">
+                <Link className="btn btn-line" to={`/publier/${p.id}`}>
+                  Modifier
+                </Link>
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  disabled={!marketReady || deletingProductId === p.id}
+                  onClick={() => deleteProduct(p)}
+                >
+                  {deletingProductId === p.id ? 'Suppression…' : 'Supprimer'}
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       ) : (
@@ -958,14 +1046,24 @@ function Sell() {
 }
 
 function Publish() {
-  const { user, marketReady, marketError, myShop, publishProduct } = useStore()
+  const { productId } = useParams()
+  const { user, ready, marketReady, marketError, myShop, products, publishProduct, updateProduct } = useStore()
   const nav = useNavigate()
-  const [photoUrl, setPhotoUrl] = useState('')
+  const editingProduct = productId ? products.find((p) => p.id === productId && p.shopId === myShop?.id) : null
+  const [photoUrl, setPhotoUrl] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const displayedPhotoUrl = photoUrl ?? editingProduct?.photo ?? ''
+
+  if (!ready) return <p className="wrap muted">Chargement…</p>
   if (!user) return <Navigate to="/inscription" replace />
   if (!myShop) return <Navigate to="/boutique/setup" replace />
   if (user.banned || myShop.banned) return <Navigate to="/vendre" replace />
+  if (productId && !editingProduct) {
+    return marketReady
+      ? <Navigate to="/vendre" replace />
+      : <p className="wrap muted">Chargement de la publication…</p>
+  }
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -987,16 +1085,19 @@ function Publish() {
         return
       }
       const photo = imageUrl(rawPhotoUrl)
-      await publishProduct({
-        id: `p-${Date.now()}`,
-        shopId: myShop.id,
+      const details = {
         name,
         priceUsd,
         category,
         description,
         photo,
-        badge: 'Nouveau',
-      })
+        badge: editingProduct?.badge || 'Nouveau',
+      }
+      if (editingProduct) {
+        await updateProduct(editingProduct.id, details)
+      } else {
+        await publishProduct({ id: `p-${Date.now()}`, shopId: myShop.id, ...details })
+      }
       nav(`/boutique/${myShop.id}`)
     } catch (err) {
       setError(err?.message || 'Impossible de publier cet article. Réessaie.')
@@ -1008,7 +1109,7 @@ function Publish() {
   return (
     <div className="wrap" style={{ padding: '28px 0' }}>
       <p className="kicker">{myShop.name}</p>
-      <h1>Publier un produit</h1>
+      <h1>{editingProduct ? 'Modifier la publication' : 'Publier un produit'}</h1>
       <form className="form" onSubmit={onSubmit} style={{ marginTop: 16 }}>
         <label>
           Lien direct de la photo
@@ -1016,7 +1117,7 @@ function Publish() {
             name="photoUrl"
             type="url"
             inputMode="url"
-            value={photoUrl}
+            value={displayedPhotoUrl}
             placeholder="https://i.ibb.co/..."
             required
             onChange={(e) => {
@@ -1029,18 +1130,18 @@ function Publish() {
           <a href="https://imgbb.com/" target="_blank" rel="noreferrer">Héberger une photo sur ImgBB</a>
           {' '}puis copie « Direct link » et colle-le ici.
         </p>
-        {photoUrl ? <img className="preview" src={photoUrl} alt="Aperçu du produit" /> : null}
+        {displayedPhotoUrl ? <img className="preview" src={displayedPhotoUrl} alt="Aperçu du produit" /> : null}
         <label>
           Nom
-          <input name="name" placeholder="Ex. Dunk Low, Lattafa Yara…" required />
+          <input name="name" defaultValue={editingProduct?.name || ''} placeholder="Ex. Dunk Low, Lattafa Yara…" required />
         </label>
         <label>
           Prix en dollars
-          <input name="priceUsd" type="number" min="1" step="1" placeholder="25" required />
+          <input name="priceUsd" type="number" min="1" step="1" defaultValue={editingProduct?.priceUsd || ''} placeholder="25" required />
         </label>
         <label>
           Catégorie
-          <select name="category">
+          <select name="category" defaultValue={editingProduct?.category || 'souliers'}>
             {CATEGORIES.filter((c) => c.id !== 'all').map((c) => (
               <option key={c.id} value={c.id}>
                 {c.label}
@@ -1050,13 +1151,13 @@ function Publish() {
         </label>
         <label>
           Description
-          <textarea name="description" placeholder="Pointure, état, quartier de livraison…" />
+          <textarea name="description" defaultValue={editingProduct?.description || ''} placeholder="Pointure, état, quartier de livraison…" />
         </label>
         {error ? <p className="error">{error}</p> : null}
         {marketError ? <p className="error">{marketError}</p> : null}
         {!marketReady ? <p className="muted">Chargement sécurisé du marché…</p> : null}
         <button className="btn btn-gold" type="submit" disabled={busy || !marketReady}>
-          {busy ? 'Publication…' : 'Mettre en ligne'}
+          {busy ? 'Enregistrement…' : editingProduct ? 'Enregistrer les modifications' : 'Mettre en ligne'}
         </button>
       </form>
     </div>
@@ -1137,6 +1238,7 @@ export default function App() {
             <Route path="/connexion" element={<Auth mode="login" />} />
             <Route path="/vendre" element={<Sell />} />
             <Route path="/publier" element={<Publish />} />
+            <Route path="/publier/:productId" element={<Publish />} />
             <Route path="/favoris" element={<Favorites />} />
             <Route path="/compte" element={<Account />} />
           </Routes>

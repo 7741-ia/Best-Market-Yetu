@@ -3,6 +3,12 @@ import { Link } from 'react-router-dom'
 import { formatUsd, formatCdf } from './data'
 import { useStore } from './store.jsx'
 
+function displayDate(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Date inconnue'
+  return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
 export default function AdminPage() {
   const {
     adminOn,
@@ -67,6 +73,41 @@ export default function AdminPage() {
           {openReports.length} signalement(s) en attente.
         </div>
       ) : null}
+
+      <section className="admin-reports" aria-labelledby="reports-title">
+        <div className="section-head">
+          <div>
+            <h2 id="reports-title">Signalements</h2>
+            <p className="muted">L’administration voit le signalant, son message et le vendeur concerné.</p>
+          </div>
+        </div>
+        {openReports.length ? (
+          <div className="report-list">
+            {openReports.map((report) => {
+              const product = products.find((item) => item.id === report.productId)
+              const shop = shops.find((item) => item.id === (report.shopId || product?.shopId))
+              const reporter = users.find((item) => item.id === report.reporterId)
+              const merchant = users.find((item) => item.id === report.merchantId || item.shopId === (report.shopId || product?.shopId))
+              const shopName = report.shopName || shop?.name || 'Boutique inconnue'
+              const reporterName = report.reporterName || reporter?.name || 'Signalant non identifié'
+              const merchantName = report.merchantName || merchant?.name || shopName
+              return (
+                <article className="report-card" key={report.id}>
+                  <p className="kicker">{report.type === 'shop' ? 'Compte / boutique' : 'Publication'}</p>
+                  <h3>{report.productName || product?.name || shopName}</h3>
+                  <p><b>Boutique signalée :</b> {shopName}</p>
+                  <p><b>Vendeur :</b> {merchantName}</p>
+                  <p><b>Signalé par :</b> {reporterName}</p>
+                  <p><b>Message :</b> {report.message || report.reason || 'Aucun message'}</p>
+                  <p className="muted">{displayDate(report.at)}</p>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="muted">Aucun signalement ouvert.</p>
+        )}
+      </section>
 
       <div className="admin-list">
         {shops.map((shop) => {

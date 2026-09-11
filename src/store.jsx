@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -251,6 +251,53 @@ export function StoreProvider({ children }) {
   const user = state.users.find((u) => u.id === state.sessionId) || null
   const myShop = user ? state.shops.find((s) => s.id === user.shopId) || null : null
 
+  const createReport = useCallback(async ({ type, productId, shopId, message }) => {
+    if (!state.sessionId) {
+      throw new Error('Connecte-toi avant d’envoyer un signalement.')
+    }
+    if (!syncReady) {
+      throw new Error('Le marché est encore en chargement. Réessaie dans quelques secondes.')
+    }
+
+    const text = String(message || '').trim()
+    if (!text || text.length > 600) {
+      throw new Error('Le message du signalement doit contenir entre 1 et 600 caractères.')
+    }
+
+    const reporter = state.users.find((u) => u.id === state.sessionId)
+    const product = productId ? state.products.find((p) => p.id === productId) : null
+    const targetShopId = shopId || product?.shopId
+    const shop = state.shops.find((s) => s.id === targetShopId)
+    const merchant = state.users.find((u) => u.shopId === targetShopId)
+    if (!shop || (type === 'product' && !product)) {
+      throw new Error('Cette publication ou cette boutique n’existe plus.')
+    }
+    if (reporter?.shopId === shop.id) {
+      throw new Error('Tu ne peux pas signaler ta propre boutique.')
+    }
+
+    const report = {
+      id: `r-${Date.now()}`,
+      type,
+      productId: product?.id || null,
+      productName: product?.name || '',
+      shopId: shop.id,
+      shopName: shop.name,
+      merchantId: merchant?.id || null,
+      merchantName: merchant?.name || shop.name,
+      reporterId: reporter?.id || state.sessionId,
+      reporterName: reporter?.name || 'Membre',
+      message: text,
+      // Conservé pour afficher les signalements créés avec l'ancienne version.
+      reason: text,
+      at: new Date().toISOString(),
+      open: true,
+    }
+    const nextState = { ...state, reports: [report, ...state.reports] }
+    setState(nextState)
+    await persistMarketState(nextState)
+  }, [state, syncReady])
+
   const api = useMemo(
     () => ({
       user,
@@ -345,6 +392,50 @@ export function StoreProvider({ children }) {
         setState(nextState)
         await persistMarketState(nextState)
       },
+      async updateProduct(productId, updates) {
+        if (!state.sessionId) {
+          throw new Error('Connecte-toi avant de modifier un article.')
+        }
+        if (!syncReady) {
+          throw new Error('Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+        }
+        const current = state.products.find((p) => p.id === productId)
+        if (!current || current.shopId !== myShop?.id) {
+          throw new Error('Tu ne peux modifier que les articles de ta boutique.')
+        }
+        const nextState = {
+          ...state,
+          products: state.products.map((p) =>
+            p.id === productId
+              ? { ...p, ...updates, id: current.id, shopId: current.shopId, views: current.views || 0, removed: false }
+              : p,
+          ),
+        }
+        setState(nextState)
+        await persistMarketState(nextState)
+      },
+      async deleteMyProduct(productId) {
+        if (!state.sessionId) {
+          throw new Error('Connecte-toi avant de supprimer un article.')
+        }
+        if (!syncReady) {
+          throw new Error('Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+        }
+        const current = state.products.find((p) => p.id === productId)
+        if (!current || current.shopId !== myShop?.id) {
+          throw new Error('Tu ne peux supprimer que les articles de ta boutique.')
+        }
+        const nextState = {
+          ...state,
+          products: state.products.filter((p) => p.id !== productId),
+          reports: state.reports.map((r) =>
+            r.productId === productId ? { ...r, open: false } : r,
+          ),
+          logs: [{ at: Date.now(), type: 'seller-delete-product', productId }, ...state.logs],
+        }
+        setState(nextState)
+        await persistMarketState(nextState)
+      },
       toggleFav(id) {
         protectLocalChanges()
         setState((s) => ({
@@ -363,21 +454,11 @@ export function StoreProvider({ children }) {
           ),
         }))
       },
-      reportProduct({ productId, reason }) {
-        protectLocalChanges()
-        setState((s) => ({
-          ...s,
-          reports: [
-            {
-              id: `r-${Date.now()}`,
-              productId,
-              reason,
-              at: new Date().toISOString(),
-              open: true,
-            },
-            ...s.reports,
-          ],
-        }))
+      async reportProduct({ productId, message }) {
+        await createReport({ type: 'product', productId, message })
+      },
+      async reportShop({ shopId, message }) {
+        await createReport({ type: 'shop', shopId, message })
       },
       adminLogin(username, password) {
         const ok =
@@ -480,7 +561,7 @@ export function StoreProvider({ children }) {
         }))
       },
     }),
-    [state, user, myShop, adminOn, online, ready, syncReady, syncError],
+    [state, user, myShop, adminOn, online, ready, syncReady, syncError, createReport],
   )
 
   return <StoreContext.Provider value={api}>{children}</StoreContext.Provider>

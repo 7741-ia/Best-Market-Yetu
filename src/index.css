@@ -573,6 +573,24 @@ textarea {
   background: var(--card);
 }
 
+.seller-product {
+  min-width: 0;
+}
+
+.seller-product-actions {
+  margin-top: 8px;
+}
+
+.btn-danger {
+  background: transparent;
+  border: 1px solid rgba(255, 106, 74, 0.7);
+  color: #ffb4a4;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 106, 74, 0.12);
+}
+
 .shell.is-admin {
   padding-bottom: 32px;
 }
@@ -636,6 +654,31 @@ textarea {
 .admin-list {
   display: grid;
   gap: 16px;
+}
+
+.admin-reports {
+  margin: 24px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--card);
+}
+
+.report-list {
+  display: grid;
+  gap: 12px;
+}
+
+.report-card {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.report-card h3,
+.report-card p {
+  margin: 0 0 8px;
 }
 
 .admin-card {
