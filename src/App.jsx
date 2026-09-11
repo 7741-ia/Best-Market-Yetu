@@ -8,13 +8,23 @@ import { StoreProvider, useStore } from './store.jsx'
 import PlacePicker from './PlacePicker.jsx'
 import AdminPage from './AdminPage.jsx'
 
-function fileToDataUrl(file) {
-  return new Promise((resolve) => {
-    if (!file) return resolve('')
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.readAsDataURL(file)
-  })
+function imageUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error('Colle un lien d’image valide commençant par https://.')
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('Colle un lien d’image valide commençant par https://.')
+  }
+  if (url.hostname === 'imgbb.com' || url.hostname.endsWith('.imgbb.com') || url.hostname === 'ibb.co') {
+    throw new Error('Sur ImgBB, copie « Direct link », qui commence généralement par https://i.ibb.co/.')
+  }
+  return url.href
 }
 
 function Layout({ children }) {
@@ -696,9 +706,9 @@ function Auth({ mode }) {
 }
 
 function SetupShop() {
-  const { user, ready, myShop, saveShop } = useStore()
+  const { user, ready, marketReady, marketError, myShop, saveShop } = useStore()
   const nav = useNavigate()
-  const [preview, setPreview] = useState(myShop?.photo || '')
+  const [photoUrl, setPhotoUrl] = useState(myShop?.photo || '')
   const [province, setProvince] = useState(myShop?.province || 'Kinshasa')
   const [city, setCity] = useState(myShop?.city || 'Gombe')
   const [gps, setGps] = useState(
@@ -706,6 +716,7 @@ function SetupShop() {
   )
   const [gpsMsg, setGpsMsg] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   if (!ready) return <p className="wrap muted">Chargement…</p>
   if (!user) return <Navigate to="/inscription" replace />
   if (user.banned) return <p className="wrap">Compte banni.</p>
@@ -713,13 +724,17 @@ function SetupShop() {
   async function onSubmit(e) {
     e.preventDefault()
     setError('')
+    if (!marketReady) {
+      setError(marketError || 'Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+      return
+    }
+    setBusy(true)
     try {
       const fd = new FormData(e.currentTarget)
       const name = String(fd.get('name') || '').trim()
       const whatsapp = String(fd.get('whatsapp') || '').trim()
       const bio = String(fd.get('bio') || '').trim()
-      const file = fd.get('photo')
-      const photo = (file && file.size ? await fileToDataUrl(file) : preview) || myShop?.photo || ''
+      const rawPhotoUrl = String(fd.get('photoUrl') || '').trim()
       if (!name || !whatsapp || !province || !city) {
         setError('Remplis le nom, la ville et le numéro WhatsApp.')
         return
@@ -729,8 +744,9 @@ function SetupShop() {
         setError('Le numéro WhatsApp doit contenir l\'indicatif, ex. 24381xxxxxxx.')
         return
       }
+      const photo = imageUrl(rawPhotoUrl) || myShop?.photo || ''
       const id = myShop?.id || slugify(name) || `shop-${Date.now()}`
-      saveShop({
+      await saveShop({
         id,
         name,
         province,
@@ -755,6 +771,8 @@ function SetupShop() {
       nav('/vendre')
     } catch (err) {
       setError(err?.message || 'Impossible d\'enregistrer la boutique. Réessaie.')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -764,24 +782,34 @@ function SetupShop() {
       <form className="form" onSubmit={onSubmit} style={{ marginTop: 16 }}>
         <label>
           Nom de la boutique
-          <input name="name" defaultValue={myShop?.name || ''} placeholder="Ex. Kicks Gombe" />
+          <input name="name" defaultValue={myShop?.name || ''} placeholder="Ex. Kicks Gombe" required />
         </label>
         <label>
-          Photo
+          Lien de la photo (facultatif)
           <input
-            name="photo"
-            type="file"
-            accept="image/*"
-            onChange={async (e) => setPreview(await fileToDataUrl(e.target.files?.[0]))}
+            name="photoUrl"
+            type="url"
+            inputMode="url"
+            value={photoUrl}
+            onChange={(e) => {
+              setPhotoUrl(e.target.value)
+              setError('')
+            }}
+            placeholder="https://i.ibb.co/..."
           />
         </label>
-        {preview ? <img className="preview" src={preview} alt="" /> : null}
+        <p className="notice">
+          <a href="https://imgbb.com/" target="_blank" rel="noreferrer">Héberger une photo sur ImgBB</a>
+          {' '}puis copie « Direct link » et colle-le ici.
+        </p>
+        {photoUrl ? <img className="preview" src={photoUrl} alt="Aperçu de la boutique" /> : null}
         <PlacePicker
           province={province}
           city={city}
           onProvince={setProvince}
           onCity={setCity}
           searchLabel="Trouver la ville"
+          required
         />
         <button
           className="btn btn-line"
@@ -801,15 +829,17 @@ function SetupShop() {
         {gpsMsg ? <p className="muted">{gpsMsg}</p> : null}
         <label>
           WhatsApp (avec indicatif 243)
-          <input name="whatsapp" defaultValue={myShop?.whatsapp || '243'} placeholder="24381…" />
+          <input name="whatsapp" type="tel" inputMode="numeric" defaultValue={myShop?.whatsapp || '243'} placeholder="24381…" required />
         </label>
         <label>
           Présentation
           <textarea name="bio" defaultValue={myShop?.bio || ''} placeholder="Ce que tu vends, zone de livraison…" />
         </label>
         {error ? <p className="error">{error}</p> : null}
-        <button className="btn btn-gold" type="submit">
-          Enregistrer la boutique
+        {marketError ? <p className="error">{marketError}</p> : null}
+        {!marketReady ? <p className="muted">Chargement sécurisé du marché…</p> : null}
+        <button className="btn btn-gold" type="submit" disabled={busy || !marketReady}>
+          {busy ? 'Enregistrement…' : 'Enregistrer la boutique'}
         </button>
       </form>
     </div>
@@ -928,34 +958,51 @@ function Sell() {
 }
 
 function Publish() {
-  const { user, myShop, publishProduct } = useStore()
+  const { user, marketReady, marketError, myShop, publishProduct } = useStore()
   const nav = useNavigate()
-  const [preview, setPreview] = useState('')
+  const [photoUrl, setPhotoUrl] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   if (!user) return <Navigate to="/inscription" replace />
   if (!myShop) return <Navigate to="/boutique/setup" replace />
   if (user.banned || myShop.banned) return <Navigate to="/vendre" replace />
 
   async function onSubmit(e) {
     e.preventDefault()
+    setError('')
+    if (!marketReady) {
+      setError(marketError || 'Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+      return
+    }
+    setBusy(true)
     const fd = new FormData(e.currentTarget)
     const name = String(fd.get('name') || '').trim()
     const priceUsd = Number(fd.get('priceUsd') || 0)
     const category = String(fd.get('category') || 'souliers')
     const description = String(fd.get('description') || '')
-    const file = fd.get('photo')
-    const photo = file && file.size ? await fileToDataUrl(file) : preview
-    if (!name || !priceUsd || !photo) return
-    publishProduct({
-      id: `p-${Date.now()}`,
-      shopId: myShop.id,
-      name,
-      priceUsd,
-      category,
-      description,
-      photo,
-      badge: 'Nouveau',
-    })
-    nav(`/boutique/${myShop.id}`)
+    const rawPhotoUrl = String(fd.get('photoUrl') || '').trim()
+    try {
+      if (!name || !priceUsd || !rawPhotoUrl) {
+        setError('Remplis le nom, le prix et colle le lien direct de la photo.')
+        return
+      }
+      const photo = imageUrl(rawPhotoUrl)
+      await publishProduct({
+        id: `p-${Date.now()}`,
+        shopId: myShop.id,
+        name,
+        priceUsd,
+        category,
+        description,
+        photo,
+        badge: 'Nouveau',
+      })
+      nav(`/boutique/${myShop.id}`)
+    } catch (err) {
+      setError(err?.message || 'Impossible de publier cet article. Réessaie.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -964,22 +1011,32 @@ function Publish() {
       <h1>Publier un produit</h1>
       <form className="form" onSubmit={onSubmit} style={{ marginTop: 16 }}>
         <label>
-          Photo
+          Lien direct de la photo
           <input
-            name="photo"
-            type="file"
-            accept="image/*"
-            onChange={async (e) => setPreview(await fileToDataUrl(e.target.files?.[0]))}
+            name="photoUrl"
+            type="url"
+            inputMode="url"
+            value={photoUrl}
+            placeholder="https://i.ibb.co/..."
+            required
+            onChange={(e) => {
+              setPhotoUrl(e.target.value)
+              setError('')
+            }}
           />
         </label>
-        {preview ? <img className="preview" src={preview} alt="" /> : null}
+        <p className="notice">
+          <a href="https://imgbb.com/" target="_blank" rel="noreferrer">Héberger une photo sur ImgBB</a>
+          {' '}puis copie « Direct link » et colle-le ici.
+        </p>
+        {photoUrl ? <img className="preview" src={photoUrl} alt="Aperçu du produit" /> : null}
         <label>
           Nom
-          <input name="name" placeholder="Ex. Dunk Low, Lattafa Yara…" />
+          <input name="name" placeholder="Ex. Dunk Low, Lattafa Yara…" required />
         </label>
         <label>
           Prix en dollars
-          <input name="priceUsd" type="number" min="1" step="1" placeholder="25" />
+          <input name="priceUsd" type="number" min="1" step="1" placeholder="25" required />
         </label>
         <label>
           Catégorie
@@ -995,8 +1052,11 @@ function Publish() {
           Description
           <textarea name="description" placeholder="Pointure, état, quartier de livraison…" />
         </label>
-        <button className="btn btn-gold" type="submit">
-          Mettre en ligne
+        {error ? <p className="error">{error}</p> : null}
+        {marketError ? <p className="error">{marketError}</p> : null}
+        {!marketReady ? <p className="muted">Chargement sécurisé du marché…</p> : null}
+        <button className="btn btn-gold" type="submit" disabled={busy || !marketReady}>
+          {busy ? 'Publication…' : 'Mettre en ligne'}
         </button>
       </form>
     </div>

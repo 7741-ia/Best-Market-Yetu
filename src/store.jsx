@@ -66,6 +66,7 @@ export function StoreProvider({ children }) {
   const [adminOn, setAdminOn] = useState(() => sessionStorage.getItem(ADMIN_KEY) === '1')
   const [online, setOnline] = useState(false)
   const [syncReady, setSyncReady] = useState(false)
+  const [syncError, setSyncError] = useState('')
   // Firebase auth needs a moment to restore the session on page load. Until it
   // is "ready" we must not redirect the user to /inscription, otherwise the
   // shop creation screen sometimes refuses to open.
@@ -81,6 +82,36 @@ export function StoreProvider({ children }) {
     // state before the write reaches Firestore.
     hasPendingLocalChangesRef.current = true
     pendingPayloadRef.current = null
+  }
+
+  function sharedPayload(source) {
+    const { sessionId: _sessionId, users, ...sharedState } = source
+    return JSON.stringify({
+      ...sharedState,
+      users: users.map(withoutPassword),
+      sessionId: null,
+    })
+  }
+
+  async function persistMarketState(nextState) {
+    const payload = sharedPayload(nextState)
+    protectLocalChanges()
+    pendingPayloadRef.current = payload
+    lastSentRef.current = payload
+    try {
+      await setDoc(doc(db, 'bmy', 'state'), { data: payload })
+      setOnline(true)
+      setSyncError('')
+    } catch (error) {
+      if (pendingPayloadRef.current === payload) {
+        pendingPayloadRef.current = null
+        hasPendingLocalChangesRef.current = false
+        lastSentRef.current = null
+      }
+      setOnline(false)
+      setSyncError('La sauvegarde dans Firebase a échoué. Vérifie la connexion et les règles Firestore.')
+      throw error
+    }
   }
 
   useEffect(() => {
@@ -131,12 +162,13 @@ export function StoreProvider({ children }) {
           setDoc(ref, { data: JSON.stringify({ ...empty(), sessionId: null }) })
         }
       })
-      .catch(() => {})
+      .catch(() => setSyncError('Impossible de joindre Firebase. Réessaie quand la connexion est rétablie.'))
 
     const unsub = onSnapshot(
       ref,
       (snap) => {
         setOnline(true)
+        setSyncError('')
         if (!snap.exists()) return
         try {
           const incomingPayload = snap.data().data
@@ -189,7 +221,10 @@ export function StoreProvider({ children }) {
           /* ignore */
         }
       },
-      () => setOnline(false),
+      () => {
+        setOnline(false)
+        setSyncError('Impossible de synchroniser le marché avec Firebase.')
+      },
     )
 
     return () => {
@@ -200,17 +235,15 @@ export function StoreProvider({ children }) {
   // Écrire les changements locaux vers Firestore (débouncé)
   useEffect(() => {
     if (!remoteReadyRef.current || !syncReady) return
-    const { sessionId: _sessionId, users, ...sharedState } = state
-    const payload = JSON.stringify({
-      ...sharedState,
-      users: users.map(withoutPassword),
-      sessionId: null,
-    })
+    const payload = sharedPayload(state)
     if (payload === lastSentRef.current) return
     const timer = setTimeout(() => {
       lastSentRef.current = payload
       pendingPayloadRef.current = payload
-      setDoc(doc(db, 'bmy', 'state'), { data: payload }).catch(() => setOnline(false))
+      setDoc(doc(db, 'bmy', 'state'), { data: payload }).catch(() => {
+        setOnline(false)
+        setSyncError('La sauvegarde dans Firebase a échoué. Vérifie la connexion et les règles Firestore.')
+      })
     }, 700)
     return () => clearTimeout(timer)
   }, [state, syncReady])
@@ -231,6 +264,8 @@ export function StoreProvider({ children }) {
       adminOn,
       online,
       ready,
+      marketReady: syncReady,
+      marketError: syncError,
       publicShops: state.shops.filter((s) => !s.banned),
       publicProducts: state.products.filter((p) => {
         const shop = state.shops.find((s) => s.id === p.shopId)
@@ -277,32 +312,38 @@ export function StoreProvider({ children }) {
         await signOut(auth)
         setState((s) => ({ ...s, sessionId: null }))
       },
-      saveShop(shop) {
+      async saveShop(shop) {
         // Vérifie que le vendeur a bien un compte avant de créer la boutique.
         if (!state.sessionId) {
           throw new Error('Connecte-toi avant de créer ta boutique.')
         }
-        protectLocalChanges()
-        setState((s) => {
-          if (!s.sessionId) {
-            throw new Error('Connecte-toi avant de créer ta boutique.')
-          }
-          const exists = s.shops.some((x) => x.id === shop.id)
-          const shops = exists
-            ? s.shops.map((x) => (x.id === shop.id ? { ...x, ...shop } : x))
-            : [{ banned: false, warnings: [], trusted: false, ...shop }, ...s.shops]
-          const users = s.users.map((u) =>
-            u.id === s.sessionId ? { ...u, shopId: shop.id } : u,
-          )
-          return { ...s, shops, users }
-        })
+        if (!syncReady) {
+          throw new Error('Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+        }
+        const exists = state.shops.some((x) => x.id === shop.id)
+        const shops = exists
+          ? state.shops.map((x) => (x.id === shop.id ? { ...x, ...shop } : x))
+          : [{ banned: false, warnings: [], trusted: false, ...shop }, ...state.shops]
+        const users = state.users.map((u) =>
+          u.id === state.sessionId ? { ...u, shopId: shop.id } : u,
+        )
+        const nextState = { ...state, shops, users }
+        setState(nextState)
+        await persistMarketState(nextState)
       },
-      publishProduct(product) {
-        protectLocalChanges()
-        setState((s) => ({
-          ...s,
-          products: [{ ...product, views: 0, removed: false }, ...s.products],
-        }))
+      async publishProduct(product) {
+        if (!state.sessionId) {
+          throw new Error('Connecte-toi avant de publier un article.')
+        }
+        if (!syncReady) {
+          throw new Error('Le marché est encore en chargement. Attends quelques secondes puis réessaie.')
+        }
+        const nextState = {
+          ...state,
+          products: [{ ...product, views: 0, removed: false }, ...state.products],
+        }
+        setState(nextState)
+        await persistMarketState(nextState)
       },
       toggleFav(id) {
         protectLocalChanges()
@@ -439,7 +480,7 @@ export function StoreProvider({ children }) {
         }))
       },
     }),
-    [state, user, myShop, adminOn, online, ready],
+    [state, user, myShop, adminOn, online, ready, syncReady, syncError],
   )
 
   return <StoreContext.Provider value={api}>{children}</StoreContext.Provider>

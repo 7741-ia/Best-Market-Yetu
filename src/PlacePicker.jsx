@@ -8,6 +8,7 @@ export default function PlacePicker({
   onCity,
   onSearch,
   searchLabel = 'Chercher',
+  required = false,
 }) {
   const [q, setQ] = useState('')
   const cities = citiesOf(province)
@@ -48,6 +49,7 @@ export default function PlacePicker({
         Province
         <select
           value={province}
+          required={required}
           onChange={(e) => {
             onProvince(e.target.value)
             onCity('')
@@ -63,7 +65,7 @@ export default function PlacePicker({
       </label>
       <label>
         Ville / commune
-        <select value={city} onChange={(e) => onCity(e.target.value)} disabled={!province}>
+        <select value={city} onChange={(e) => onCity(e.target.value)} disabled={!province} required={required}>
           <option value="">{province ? 'Toutes les villes' : 'Choisis d’abord la province'}</option>
           {cities.map((c) => (
             <option key={c} value={c}>
