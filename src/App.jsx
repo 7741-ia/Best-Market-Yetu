@@ -696,7 +696,7 @@ function Auth({ mode }) {
 }
 
 function SetupShop() {
-  const { user, myShop, saveShop } = useStore()
+  const { user, ready, myShop, saveShop } = useStore()
   const nav = useNavigate()
   const [preview, setPreview] = useState(myShop?.photo || '')
   const [province, setProvince] = useState(myShop?.province || 'Kinshasa')
@@ -705,42 +705,57 @@ function SetupShop() {
     myShop?.lat ? { lat: myShop.lat, lng: myShop.lng } : null,
   )
   const [gpsMsg, setGpsMsg] = useState('')
+  const [error, setError] = useState('')
+  if (!ready) return <p className="wrap muted">Chargement…</p>
   if (!user) return <Navigate to="/inscription" replace />
   if (user.banned) return <p className="wrap">Compte banni.</p>
 
   async function onSubmit(e) {
     e.preventDefault()
-    const fd = new FormData(e.currentTarget)
-    const name = String(fd.get('name') || '').trim()
-    const whatsapp = String(fd.get('whatsapp') || '').trim()
-    const bio = String(fd.get('bio') || '').trim()
-    const file = fd.get('photo')
-    const photo = (file && file.size ? await fileToDataUrl(file) : preview) || myShop?.photo || ''
-    if (!name || !whatsapp || !province || !city) return
-    const id = myShop?.id || slugify(name) || `shop-${Date.now()}`
-    saveShop({
-      id,
-      name,
-      province,
-      city,
-      lat: gps?.lat,
-      lng: gps?.lng,
-      tauxCdfPerUsd: myShop?.tauxCdfPerUsd || 2800,
-      money: myShop?.money || { airtel: '', mpesa: '', orange: '' },
-      whatsapp: whatsapp.replace(/\D/g, ''),
-      bio: bio || 'Boutique sur Best Market Yetu.',
-      photo:
-        photo ||
-        'https://images.unsplash.com/photo-1556906781-9a412961c28c?auto=format&fit=crop&w=400&q=80',
-      cover:
-        myShop?.cover ||
-        'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1200&q=80',
-      featured: true,
-      banned: myShop?.banned || false,
-      trusted: myShop?.trusted || false,
-      warnings: myShop?.warnings || [],
-    })
-    nav('/vendre')
+    setError('')
+    try {
+      const fd = new FormData(e.currentTarget)
+      const name = String(fd.get('name') || '').trim()
+      const whatsapp = String(fd.get('whatsapp') || '').trim()
+      const bio = String(fd.get('bio') || '').trim()
+      const file = fd.get('photo')
+      const photo = (file && file.size ? await fileToDataUrl(file) : preview) || myShop?.photo || ''
+      if (!name || !whatsapp || !province || !city) {
+        setError('Remplis le nom, la ville et le numéro WhatsApp.')
+        return
+      }
+      const digits = whatsapp.replace(/\D/g, '')
+      if (digits.length < 9) {
+        setError('Le numéro WhatsApp doit contenir l\'indicatif, ex. 24381xxxxxxx.')
+        return
+      }
+      const id = myShop?.id || slugify(name) || `shop-${Date.now()}`
+      saveShop({
+        id,
+        name,
+        province,
+        city,
+        lat: gps?.lat,
+        lng: gps?.lng,
+        tauxCdfPerUsd: myShop?.tauxCdfPerUsd || 2800,
+        money: myShop?.money || { airtel: '', mpesa: '', orange: '' },
+        whatsapp: digits,
+        bio: bio || 'Boutique sur Best Market Yetu.',
+        photo:
+          photo ||
+          'https://images.unsplash.com/photo-1556906781-9a412961c28c?auto=format&fit=crop&w=400&q=80',
+        cover:
+          myShop?.cover ||
+          'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1200&q=80',
+        featured: true,
+        banned: myShop?.banned || false,
+        trusted: myShop?.trusted || false,
+        warnings: myShop?.warnings || [],
+      })
+      nav('/vendre')
+    } catch (err) {
+      setError(err?.message || 'Impossible d\'enregistrer la boutique. Réessaie.')
+    }
   }
 
   return (
@@ -792,6 +807,7 @@ function SetupShop() {
           Présentation
           <textarea name="bio" defaultValue={myShop?.bio || ''} placeholder="Ce que tu vends, zone de livraison…" />
         </label>
+        {error ? <p className="error">{error}</p> : null}
         <button className="btn btn-gold" type="submit">
           Enregistrer la boutique
         </button>
@@ -801,7 +817,8 @@ function SetupShop() {
 }
 
 function Sell() {
-  const { user, myShop, products, saveShop } = useStore()
+  const { user, ready, myShop, products, saveShop } = useStore()
+  if (!ready) return <p className="wrap muted">Chargement…</p>
   if (!user) return <Navigate to="/inscription" replace />
   if (user.banned || myShop?.banned) {
     return (

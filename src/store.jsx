@@ -65,6 +65,10 @@ export function StoreProvider({ children }) {
   const [state, setState] = useState(load)
   const [adminOn, setAdminOn] = useState(() => sessionStorage.getItem(ADMIN_KEY) === '1')
   const [online, setOnline] = useState(false)
+  // Firebase auth needs a moment to restore the session on page load. Until it
+  // is "ready" we must not redirect the user to /inscription, otherwise the
+  // shop creation screen sometimes refuses to open.
+  const [ready, setReady] = useState(false)
   const lastSentRef = useRef(null)
   const remoteReadyRef = useRef(false)
 
@@ -76,7 +80,8 @@ export function StoreProvider({ children }) {
   // id is local to this browser; it is not stored in the shared Firestore data.
   useEffect(() => {
     auth.languageCode = 'fr'
-    return onAuthStateChanged(auth, (firebaseUser) => {
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
+      setReady(true)
       setState((s) => {
         if (!firebaseUser) {
           return s.sessionId ? { ...s, sessionId: null } : s
@@ -101,6 +106,7 @@ export function StoreProvider({ children }) {
         }
       })
     })
+    return () => unsub()
   }, [])
 
   // ---- Sync Firestore : un seul document partagé par tout le monde ----
@@ -195,6 +201,7 @@ export function StoreProvider({ children }) {
       users: state.users,
       adminOn,
       online,
+      ready,
       publicShops: state.shops.filter((s) => !s.banned),
       publicProducts: state.products.filter((p) => {
         const shop = state.shops.find((s) => s.id === p.shopId)
@@ -241,7 +248,14 @@ export function StoreProvider({ children }) {
         setState((s) => ({ ...s, sessionId: null }))
       },
       saveShop(shop) {
+        // Vérifie que le vendeur a bien un compte avant de créer la boutique.
+        if (!state.sessionId) {
+          throw new Error('Connecte-toi avant de créer ta boutique.')
+        }
         setState((s) => {
+          if (!s.sessionId) {
+            throw new Error('Connecte-toi avant de créer ta boutique.')
+          }
           const exists = s.shops.some((x) => x.id === shop.id)
           const shops = exists
             ? s.shops.map((x) => (x.id === shop.id ? { ...x, ...shop } : x))
@@ -385,7 +399,7 @@ export function StoreProvider({ children }) {
         }))
       },
     }),
-    [state, user, myShop, adminOn, online],
+    [state, user, myShop, adminOn, online, ready],
   )
 
   return <StoreContext.Provider value={api}>{children}</StoreContext.Provider>
