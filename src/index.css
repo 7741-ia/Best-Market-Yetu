@@ -86,11 +86,8 @@ img {
   width: 36px;
   height: 36px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--gold), var(--coral));
-  color: #1a1008;
-  display: grid;
-  place-items: center;
-  font-size: 15px;
+  object-fit: cover;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.32);
 }
 
 .brand small {

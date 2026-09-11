@@ -1,0 +1,18 @@
+{
+  "name": "Best Market Yetu",
+  "short_name": "Best Market",
+  "description": "Le marché pour créer et découvrir des boutiques.",
+  "lang": "fr",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#07195e",
+  "background_color": "#07195e",
+  "icons": [
+    {
+      "src": "/image.png",
+      "sizes": "1280x1280",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

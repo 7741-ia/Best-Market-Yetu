@@ -25,7 +25,7 @@ function Layout({ children }) {
     <div className={`shell ${isAdmin ? 'is-admin' : ''}`}>
       <header className="topbar">
         <Link to="/" className="brand">
-          <span className="brand-mark">BY</span>
+          <img className="brand-mark" src="/image.png" alt="Best Market Yetu" />
           <span>
             Best Market Yetu
             <small>Ta boutique, sans magasin</small>
