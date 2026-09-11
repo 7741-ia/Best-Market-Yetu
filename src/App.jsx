@@ -348,29 +348,87 @@ function ShopPage() {
   )
 }
 
+function authErrorMessage(error) {
+  switch (error?.code) {
+    case 'auth/email-already-in-use':
+      return 'Cet e-mail possède déjà un compte. Connecte-toi ou réinitialise ton mot de passe.'
+    case 'auth/invalid-email':
+      return 'Entre une adresse e-mail valide.'
+    case 'auth/weak-password':
+      return 'Le mot de passe doit contenir au moins 6 caractères.'
+    case 'auth/invalid-credential':
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+      return 'E-mail ou mot de passe incorrect.'
+    case 'auth/account-banned':
+      return 'Ce compte a été banni par l’admin du marché.'
+    case 'auth/operation-not-allowed':
+      return 'La connexion e-mail n’est pas encore activée dans Firebase.'
+    case 'auth/too-many-requests':
+      return 'Trop de tentatives. Réessaie dans quelques minutes.'
+    default:
+      return 'Une erreur est survenue. Réessaie.'
+  }
+}
+
 function Auth({ mode }) {
-  const { signup, login, user } = useStore()
+  const { signup, login, resetPassword, user } = useStore()
   const nav = useNavigate()
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
   if (user) return <Navigate to="/vendre" replace />
 
-  function onSubmit(e) {
+  async function onSubmit(e) {
     e.preventDefault()
+    setError('')
+    setNotice('')
     const fd = new FormData(e.currentTarget)
     const name = String(fd.get('name') || '')
     const phone = String(fd.get('phone') || '')
     const password = String(fd.get('password') || '')
-    if (mode === 'signup') {
-      if (!name || !phone || !password) return setError('Remplis tous les champs.')
-      signup({ name, phone, password })
-      nav('/boutique/setup')
-    } else {
-      const ok = login({ phone, password })
-      if (!ok.ok && ok.reason === 'banni') {
-        return setError('Ce compte a été banni par l’admin du marché.')
+    const passwordConfirmation = String(fd.get('passwordConfirmation') || '')
+    if (!email || !password || (mode === 'signup' && (!name || !phone))) {
+      setError('Remplis tous les champs.')
+      return
+    }
+    if (mode === 'signup' && password !== passwordConfirmation) {
+      setError('Les deux mots de passe ne sont pas identiques.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      if (mode === 'signup') {
+        await signup({ name, phone, email, password })
+        nav('/boutique/setup')
+      } else {
+        await login({ email, password })
+        nav('/vendre')
       }
-      if (!ok.ok) return setError('Téléphone ou mot de passe incorrect.')
-      nav('/vendre')
+    } catch (authError) {
+      setError(authErrorMessage(authError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onForgotPassword() {
+    setError('')
+    setNotice('')
+    if (!email) {
+      setError('Entre ton e-mail, puis clique à nouveau sur « Mot de passe oublié ? ».')
+      return
+    }
+    setBusy(true)
+    try {
+      await resetPassword(email)
+      setNotice('Si un compte existe pour cet e-mail, un lien de réinitialisation vient d’être envoyé.')
+    } catch (authError) {
+      setError(authErrorMessage(authError))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -381,27 +439,59 @@ function Auth({ mode }) {
         {mode === 'signup' ? (
           <label>
             Ton nom
-            <input name="name" placeholder="Ex. Grâce Kasongo" />
+            <input name="name" autoComplete="name" placeholder="Ex. Grâce Kasongo" required />
+          </label>
+        ) : null}
+        {mode === 'signup' ? (
+          <label>
+            Téléphone
+            <input name="phone" type="tel" autoComplete="tel" placeholder="081 000 0000" required />
           </label>
         ) : null}
         <label>
-          Téléphone
-          <input name="phone" placeholder="081 000 0000" />
+          E-mail
+          <input
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="nom@exemple.com"
+            required
+          />
         </label>
         <label>
           Mot de passe
-          <input name="password" type="password" />
+          <input
+            name="password"
+            type="password"
+            autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+            minLength="6"
+            required
+          />
         </label>
+        {mode === 'signup' ? (
+          <label>
+            Confirmer le mot de passe
+            <input name="passwordConfirmation" type="password" autoComplete="new-password" minLength="6" required />
+          </label>
+        ) : null}
         {error ? <p className="error">{error}</p> : null}
-        <button className="btn btn-gold" type="submit">
-          {mode === 'signup' ? 'Créer le compte' : 'Entrer'}
+        {notice ? <p className="notice">{notice}</p> : null}
+        <button className="btn btn-gold" type="submit" disabled={busy}>
+          {busy ? 'Patiente…' : mode === 'signup' ? 'Créer le compte' : 'Entrer'}
         </button>
       </form>
       <p style={{ marginTop: 16 }}>
         {mode === 'signup' ? (
           <Link to="/connexion">J’ai déjà un compte</Link>
         ) : (
-          <Link to="/inscription">Nouveau ? Crée un compte</Link>
+          <>
+            <button className="ghost" type="button" disabled={busy} onClick={onForgotPassword}>
+              Mot de passe oublié ?
+            </button>{' '}
+            <Link to="/inscription">Nouveau ? Crée un compte</Link>
+          </>
         )}
       </p>
     </div>
@@ -737,6 +827,7 @@ function Account() {
     <div className="wrap" style={{ padding: '22px 0' }}>
       <h1>{user.name}</h1>
       <p className="muted">{user.phone}</p>
+      <p className="muted">{user.email}</p>
       <p className="lead">{myShop ? `Boutique : ${myShop.name}` : 'Pas encore de boutique.'}</p>
       <div className="row">
         <Link className="btn btn-gold" to="/vendre">
@@ -745,8 +836,8 @@ function Account() {
         <button
           className="btn btn-line"
           type="button"
-          onClick={() => {
-            logout()
+          onClick={async () => {
+            await logout()
             nav('/')
           }}
         >

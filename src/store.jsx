@@ -1,10 +1,25 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+} from 'firebase/auth'
+import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore'
+import { auth, db } from './firebase'
 import { PRODUCTS, SHOPS } from './data'
 import { ADMIN_PASSWORD, ADMIN_USERNAME } from './geo'
 
 const KEY = 'bmy-store-v2'
 const ADMIN_KEY = 'bmy-admin-v1'
 const StoreContext = createContext(null)
+
+function withoutPassword(user) {
+  const { password: _password, ...safeUser } = user
+  return safeUser
+}
 
 const empty = () => ({
   users: [],
@@ -24,6 +39,9 @@ function load() {
       return {
         ...empty(),
         ...parsed,
+        // A session is specific to the current browser and must never be shared.
+        sessionId: null,
+        users: (parsed.users || []).map(withoutPassword),
         shops: (parsed.shops?.length ? parsed.shops : SHOPS).map((s) => ({
           banned: false,
           trusted: false,
@@ -46,9 +64,120 @@ function load() {
 export function StoreProvider({ children }) {
   const [state, setState] = useState(load)
   const [adminOn, setAdminOn] = useState(() => sessionStorage.getItem(ADMIN_KEY) === '1')
+  const [online, setOnline] = useState(false)
+  const lastSentRef = useRef(null)
+  const remoteReadyRef = useRef(false)
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(state))
+  }, [state])
+
+  // Firebase keeps the signed-in account between page refreshes. The account
+  // id is local to this browser; it is not stored in the shared Firestore data.
+  useEffect(() => {
+    auth.languageCode = 'fr'
+    return onAuthStateChanged(auth, (firebaseUser) => {
+      setState((s) => {
+        if (!firebaseUser) {
+          return s.sessionId ? { ...s, sessionId: null } : s
+        }
+
+        const existing = s.users.find((u) => u.id === firebaseUser.uid)
+        const nextUser = {
+          ...existing,
+          id: firebaseUser.uid,
+          name: existing?.name || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Vendeur',
+          email: firebaseUser.email || existing?.email || '',
+          phone: existing?.phone || '',
+          shopId: existing?.shopId || null,
+          banned: existing?.banned || false,
+        }
+        return {
+          ...s,
+          users: existing
+            ? s.users.map((u) => (u.id === firebaseUser.uid ? nextUser : u))
+            : [...s.users, nextUser],
+          sessionId: firebaseUser.uid,
+        }
+      })
+    })
+  }, [])
+
+  // ---- Sync Firestore : un seul document partagé par tout le monde ----
+  useEffect(() => {
+    const ref = doc(db, 'bmy', 'state')
+
+    // Créer le document s'il n'existe pas encore
+    getDoc(ref)
+      .then((snap) => {
+        if (!snap.exists()) {
+          setDoc(ref, { data: JSON.stringify({ ...empty(), sessionId: null }) })
+        }
+      })
+      .catch(() => {})
+
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        setOnline(true)
+        if (!snap.exists()) return
+        try {
+          const parsed = JSON.parse(snap.data().data)
+          lastSentRef.current = snap.data().data
+          remoteReadyRef.current = true
+          setState((s) => {
+            const sessionId = auth.currentUser?.uid || null
+            const remoteUsers = (parsed.users || []).map(withoutPassword)
+            const signedInUser = sessionId ? s.users.find((u) => u.id === sessionId) : null
+            const users =
+              signedInUser && !remoteUsers.some((u) => u.id === sessionId)
+                ? [...remoteUsers, signedInUser]
+                : remoteUsers
+            return {
+              ...empty(),
+              ...parsed,
+              users,
+              sessionId,
+              shops: (parsed.shops?.length ? parsed.shops : SHOPS).map((sh) => ({
+                banned: false,
+                trusted: false,
+                warnings: [],
+                tauxCdfPerUsd: 2800,
+                money: { airtel: '', mpesa: '', orange: '' },
+                ...sh,
+              })),
+              products: parsed.products?.length ? parsed.products : PRODUCTS,
+              reports: parsed.reports || [],
+              logs: parsed.logs || [],
+            }
+          })
+        } catch {
+          /* ignore */
+        }
+      },
+      () => setOnline(false),
+    )
+
+    return () => {
+      unsub()
+    }
+  }, [])
+
+  // Écrire les changements locaux vers Firestore (débouncé)
+  useEffect(() => {
+    if (!remoteReadyRef.current) return
+    const { sessionId: _sessionId, users, ...sharedState } = state
+    const payload = JSON.stringify({
+      ...sharedState,
+      users: users.map(withoutPassword),
+      sessionId: null,
+    })
+    if (payload === lastSentRef.current) return
+    const timer = setTimeout(() => {
+      lastSentRef.current = payload
+      setDoc(doc(db, 'bmy', 'state'), { data: payload }).catch(() => setOnline(false))
+    }, 700)
+    return () => clearTimeout(timer)
   }, [state])
 
   const user = state.users.find((u) => u.id === state.sessionId) || null
@@ -65,38 +194,50 @@ export function StoreProvider({ children }) {
       logs: state.logs,
       users: state.users,
       adminOn,
+      online,
       publicShops: state.shops.filter((s) => !s.banned),
       publicProducts: state.products.filter((p) => {
         const shop = state.shops.find((s) => s.id === p.shopId)
         return shop && !shop.banned && !p.removed
       }),
-      signup({ name, phone, password }) {
-        const id = `u-${Date.now()}`
+      async signup({ name, phone, email, password }) {
+        const credential = await createUserWithEmailAndPassword(auth, email.trim(), password)
+        await updateProfile(credential.user, { displayName: name.trim() })
+        const id = credential.user.uid
         const next = {
           id,
           name: name.trim(),
           phone: phone.trim(),
-          password,
+          email: credential.user.email || email.trim(),
           shopId: null,
           banned: false,
         }
         setState((s) => ({
           ...s,
-          users: [...s.users, next],
+          users: s.users.some((u) => u.id === id)
+            ? s.users.map((u) => (u.id === id ? { ...u, ...next } : u))
+            : [...s.users, next],
           sessionId: id,
         }))
         return next
       },
-      login({ phone, password }) {
-        const found = state.users.find(
-          (u) => u.phone.trim() === phone.trim() && u.password === password,
-        )
-        if (!found) return { ok: false, reason: 'identifiants' }
-        if (found.banned) return { ok: false, reason: 'banni' }
-        setState((s) => ({ ...s, sessionId: found.id }))
-        return { ok: true, user: found }
+      async login({ email, password }) {
+        const credential = await signInWithEmailAndPassword(auth, email.trim(), password)
+        const found = state.users.find((u) => u.id === credential.user.uid)
+        if (found?.banned) {
+          await signOut(auth)
+          const error = new Error('Compte suspendu.')
+          error.code = 'auth/account-banned'
+          throw error
+        }
+        setState((s) => ({ ...s, sessionId: credential.user.uid }))
+        return credential.user
       },
-      logout() {
+      async resetPassword(email) {
+        await sendPasswordResetEmail(auth, email.trim())
+      },
+      async logout() {
+        await signOut(auth)
         setState((s) => ({ ...s, sessionId: null }))
       },
       saveShop(shop) {
@@ -244,7 +385,7 @@ export function StoreProvider({ children }) {
         }))
       },
     }),
-    [state, user, myShop, adminOn],
+    [state, user, myShop, adminOn, online],
   )
 
   return <StoreContext.Provider value={api}>{children}</StoreContext.Provider>
