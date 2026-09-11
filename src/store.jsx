@@ -14,6 +14,7 @@ import { ADMIN_PASSWORD, ADMIN_USERNAME } from './geo'
 
 const KEY = 'bmy-store-v2'
 const ADMIN_KEY = 'bmy-admin-v1'
+const LEGACY_DEMO_SHOP_IDS = new Set(['kicks-gombe', 'parfum-sika', 'mama-style', 'gold-wrist'])
 const StoreContext = createContext(null)
 
 function withoutPassword(user) {
@@ -31,6 +32,23 @@ const empty = () => ({
   logs: [],
 })
 
+function productionShops(shops) {
+  return (shops || [])
+    .filter((shop) => !LEGACY_DEMO_SHOP_IDS.has(shop.id))
+    .map((shop) => ({
+      banned: false,
+      trusted: false,
+      warnings: [],
+      tauxCdfPerUsd: 2800,
+      money: { airtel: '', mpesa: '', orange: '' },
+      ...shop,
+    }))
+}
+
+function productionProducts(products) {
+  return (products || []).filter((product) => !LEGACY_DEMO_SHOP_IDS.has(product.shopId))
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(KEY) || localStorage.getItem('bmy-store-v1')
@@ -42,15 +60,8 @@ function load() {
         // A session is specific to the current browser and must never be shared.
         sessionId: null,
         users: (parsed.users || []).map(withoutPassword),
-        shops: (parsed.shops?.length ? parsed.shops : SHOPS).map((s) => ({
-          banned: false,
-          trusted: false,
-          warnings: [],
-          tauxCdfPerUsd: 2800,
-          money: { airtel: '', mpesa: '', orange: '' },
-          ...s,
-        })),
-        products: parsed.products?.length ? parsed.products : PRODUCTS,
+        shops: productionShops(parsed.shops),
+        products: productionProducts(parsed.products),
         reports: parsed.reports || [],
         logs: parsed.logs || [],
       }
@@ -204,15 +215,8 @@ export function StoreProvider({ children }) {
               ...parsed,
               users,
               sessionId,
-              shops: (parsed.shops?.length ? parsed.shops : SHOPS).map((sh) => ({
-                banned: false,
-                trusted: false,
-                warnings: [],
-                tauxCdfPerUsd: 2800,
-                money: { airtel: '', mpesa: '', orange: '' },
-                ...sh,
-              })),
-              products: parsed.products?.length ? parsed.products : PRODUCTS,
+              shops: productionShops(parsed.shops),
+              products: productionProducts(parsed.products),
               reports: parsed.reports || [],
               logs: parsed.logs || [],
             }

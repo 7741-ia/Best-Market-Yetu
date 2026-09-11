@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore'
-import { CATEGORIES, formatCdf, formatUsd, shopRate, slugify, waBuyUrl } from './data'
+import { CATEGORIES, formatCdf, formatUsd, productImage, shopRate, slugify, waBuyUrl } from './data'
 import { db } from './firebase'
 import { kmBetween, mapEmbed, readGps } from './geo'
 import { StoreProvider, useStore } from './store.jsx'
@@ -77,7 +77,7 @@ function ProductCard({ product, shop }) {
     <article className="card">
       <div className="photo">
         <Link to={`/produit/${product.id}`}>
-          <img src={product.photo} alt={product.name} />
+          <img src={productImage(product)} alt={product.name} />
         </Link>
         {product.badge ? <span className="badge">{product.badge}</span> : null}
         <button
@@ -400,7 +400,7 @@ function ProductPage() {
   return (
     <div className="wrap detail">
       <div className="detail-photo">
-        <img src={product.photo} alt={product.name} />
+        <img src={productImage(product)} alt={product.name} />
       </div>
       <div>
         <p className="kicker">
