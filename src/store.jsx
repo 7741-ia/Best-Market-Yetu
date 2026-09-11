@@ -65,12 +65,23 @@ export function StoreProvider({ children }) {
   const [state, setState] = useState(load)
   const [adminOn, setAdminOn] = useState(() => sessionStorage.getItem(ADMIN_KEY) === '1')
   const [online, setOnline] = useState(false)
+  const [syncReady, setSyncReady] = useState(false)
   // Firebase auth needs a moment to restore the session on page load. Until it
   // is "ready" we must not redirect the user to /inscription, otherwise the
   // shop creation screen sometimes refuses to open.
   const [ready, setReady] = useState(false)
   const lastSentRef = useRef(null)
   const remoteReadyRef = useRef(false)
+  const hasPendingLocalChangesRef = useRef(false)
+  const pendingPayloadRef = useRef(null)
+
+  function protectLocalChanges() {
+    // A slow first Firestore response can arrive after a user just created a
+    // shop or product. Keep that old response from replacing the new local
+    // state before the write reaches Firestore.
+    hasPendingLocalChangesRef.current = true
+    pendingPayloadRef.current = null
+  }
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(state))
@@ -128,9 +139,26 @@ export function StoreProvider({ children }) {
         setOnline(true)
         if (!snap.exists()) return
         try {
-          const parsed = JSON.parse(snap.data().data)
-          lastSentRef.current = snap.data().data
+          const incomingPayload = snap.data().data
+          const parsed = JSON.parse(incomingPayload)
           remoteReadyRef.current = true
+          setSyncReady(true)
+
+          // Ignore an older remote snapshot while a local marketplace change
+          // is waiting to be written. We accept the snapshot that confirms
+          // exactly the payload we just sent.
+          if (
+            hasPendingLocalChangesRef.current &&
+            incomingPayload !== pendingPayloadRef.current
+          ) {
+            return
+          }
+
+          if (incomingPayload === pendingPayloadRef.current) {
+            hasPendingLocalChangesRef.current = false
+            pendingPayloadRef.current = null
+          }
+          lastSentRef.current = incomingPayload
           setState((s) => {
             const sessionId = auth.currentUser?.uid || null
             const remoteUsers = (parsed.users || []).map(withoutPassword)
@@ -171,7 +199,7 @@ export function StoreProvider({ children }) {
 
   // Écrire les changements locaux vers Firestore (débouncé)
   useEffect(() => {
-    if (!remoteReadyRef.current) return
+    if (!remoteReadyRef.current || !syncReady) return
     const { sessionId: _sessionId, users, ...sharedState } = state
     const payload = JSON.stringify({
       ...sharedState,
@@ -181,10 +209,11 @@ export function StoreProvider({ children }) {
     if (payload === lastSentRef.current) return
     const timer = setTimeout(() => {
       lastSentRef.current = payload
+      pendingPayloadRef.current = payload
       setDoc(doc(db, 'bmy', 'state'), { data: payload }).catch(() => setOnline(false))
     }, 700)
     return () => clearTimeout(timer)
-  }, [state])
+  }, [state, syncReady])
 
   const user = state.users.find((u) => u.id === state.sessionId) || null
   const myShop = user ? state.shops.find((s) => s.id === user.shopId) || null : null
@@ -219,6 +248,7 @@ export function StoreProvider({ children }) {
           shopId: null,
           banned: false,
         }
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           users: s.users.some((u) => u.id === id)
@@ -252,6 +282,7 @@ export function StoreProvider({ children }) {
         if (!state.sessionId) {
           throw new Error('Connecte-toi avant de créer ta boutique.')
         }
+        protectLocalChanges()
         setState((s) => {
           if (!s.sessionId) {
             throw new Error('Connecte-toi avant de créer ta boutique.')
@@ -267,12 +298,14 @@ export function StoreProvider({ children }) {
         })
       },
       publishProduct(product) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           products: [{ ...product, views: 0, removed: false }, ...s.products],
         }))
       },
       toggleFav(id) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           favorites: s.favorites.includes(id)
@@ -281,6 +314,7 @@ export function StoreProvider({ children }) {
         }))
       },
       bumpViews(id) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           products: s.products.map((p) =>
@@ -289,6 +323,7 @@ export function StoreProvider({ children }) {
         }))
       },
       reportProduct({ productId, reason }) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           reports: [
@@ -317,6 +352,7 @@ export function StoreProvider({ children }) {
         setAdminOn(false)
       },
       warnShop(shopId, message) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           shops: s.shops.map((x) =>
@@ -334,6 +370,7 @@ export function StoreProvider({ children }) {
         }))
       },
       removeProduct(productId, { warn, shopId, message } = {}) {
+        protectLocalChanges()
         setState((s) => {
           let shops = s.shops
           if (warn && shopId) {
@@ -366,6 +403,7 @@ export function StoreProvider({ children }) {
         })
       },
       banShop(shopId) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           shops: s.shops.map((x) =>
@@ -381,6 +419,7 @@ export function StoreProvider({ children }) {
         }))
       },
       unbanShop(shopId) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           shops: s.shops.map((x) =>
@@ -393,6 +432,7 @@ export function StoreProvider({ children }) {
         }))
       },
       setTrusted(shopId, trusted) {
+        protectLocalChanges()
         setState((s) => ({
           ...s,
           shops: s.shops.map((x) => (x.id === shopId ? { ...x, trusted } : x)),
